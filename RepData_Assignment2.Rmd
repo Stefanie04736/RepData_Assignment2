@@ -1,0 +1,191 @@
+---
+output: html_document
+---
+# Heat and tornados most dangerous to population health, floods with the greatest economic consequences
+
+In this report the consequences of severe weather events are analysed. The analysis uses the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database, specifically data from 1993 to 2011. It is found that heat and tornados have caused most fatalities and injuries whereas floods have caused the highest property damages.
+
+## Data Processing
+
+At first the necessary packages are loaded.
+```{r message=FALSE}
+library(lubridate)
+library(dplyr)
+library(sqldf)
+library(ggplot2)
+library(reshape2)
+```
+
+The file is downloaded and loaded into R. Afterwards the columns that are relevant for the analysis - BGN_DATE, STATE, EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG and CROPDMGEXP - are extracted.
+
+```{r cache=TRUE}
+url <- "http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+data <- read.csv("StormData")
+data<-data[,c("BGN_DATE","STATE","EVTYPE","FATALITIES","INJURIES","PROPDMG","PROPDMGEXP","CROPDMG","CROPDMGEXP")]
+
+str(data)
+```
+
+The column BGN_DATE is converted into a date variable.
+
+```{r}
+data$BGN_DATE <- mdy_hms(data$BGN_DATE)
+```
+
+According to the data description the column PROPDMGEXP contains the values H (=hundred), K (=thousend), M (=million) and B (=billion). 
+We have a look at the values of PROPDMGEXP and how often they occur.
+
+```{r}
+data %>% group_by(PROPDMGEXP) %>% summarize(total = n())
+```
+
+Obviously not only H, K, M and B occur, but also numbers. These numbers occur at the following dates:
+
+```{r}
+data$BGN_DATE[grep("[1-8]",data$PROPDMGEXP)]
+```
+
+We can ignore these false values for now as they only occur between 1993 and 1995. Therefore only datasets with correct values in PROPDMGEXP and CROPDMGEXP are considered for the analysis.
+
+```{r}
+data <- sqldf('select * from data 
+              where PROPDMGEXP in ("","B","b","h","H","k","K","m","M")
+              and CROPDMGEXP in ("", "B", "k","K","m","M")')
+```
+
+The values in PROPDMG and CROPDMG are multiplied by the respective value according to PROPDMGEXP and CROPDMGEXP so that the value of PROPDMG and CROPDMG are of the same unit.
+
+```{r message=FALSE}
+data$PROPDMG[grep("[hH]",data$PROPDMGEXP)]<-data$PROPDMG[grep("[hH]",data$PROPDMGEXP)]*100
+data$PROPDMG[grep("[kK]",data$PROPDMGEXP)]<-data$PROPDMG[grep("[kK]",data$PROPDMGEXP)]*1000
+data$PROPDMG[grep("[mM]",data$PROPDMGEXP)]<-data$PROPDMG[grep("[mM]",data$PROPDMGEXP)]*1000000
+data$PROPDMG[grep("[bB]",data$PROPDMGEXP)]<-data$PROPDMG[grep("[bB]",data$PROPDMGEXP)]*1000000000
+
+data$CROPDMG[grep("[hH]",data$CROPDMGEXP)]<-data$CROPDMG[grep("[hH]",data$CROPDMGEXP)]*100
+data$CROPDMG[grep("[kK]",data$CROPDMGEXP)]<-data$CROPDMG[grep("[kK]",data$CROPDMGEXP)]*1000
+data$CROPDMG[grep("[mM]",data$CROPDMGEXP)]<-data$CROPDMG[grep("[mM]",data$CROPDMGEXP)]*1000000
+data$CROPDMG[grep("[bB]",data$CROPDMGEXP)]<-data$CROPDMG[grep("[bB]",data$CROPDMGEXP)]*1000000000
+```
+
+We also check in which year the event types were first recorded to see if there are differences over the decades.
+
+```{r}
+event_minyear <- data%>%mutate(year=year(BGN_DATE))%>%group_by(EVTYPE)%>%summarize(min_year=min(year))%>%arrange(min_year)
+head(event_minyear,n=100)
+```
+
+As most event types were first recorded in 1993, the data is filtered for records from 1993 on.
+
+```{r}
+data <- data %>% mutate(year=year(BGN_DATE)) %>% filter(year>=1993)
+```
+
+## Results
+
+### Events that are most harmful with respect to population health
+
+We are interested in the sum of fatalities and injuries of each event across the United States. The 10 events with the most fatalities an injuries are reported.
+
+```{r}
+d <- sqldf('select EVTYPE, count(*) as [total number], sum(FATALITIES)+sum(INJURIES) as [Fatalities and injuries] 
+      from data group by EVTYPE order by sum(FATALITIES)+sum(INJURIES) desc')
+head(d,n=10)
+```
+
+Not only the aboslute numbers of fatalities and injuries are important but also the relative ones (average). Here are the 10 events that have the highest risk for population health if they occur.
+
+```{r}
+d2<-sqldf('select EVTYPE, count(*) as [total number], (sum(FATALITIES)+sum(INJURIES))/count(*) as [averaged fatalities and injuries]
+       from data group by EVTYPE having count(*)>100 order by (sum(FATALITIES)+sum(INJURIES  ))/count(*) desc')
+head(d2,n=10)
+```
+
+We can see that the events TORNADO, EXCESSIVE HEAT, HEAT and ICE STORM cause most fatalities and injuries in terms of total numbers as well as averaged numbers if they occur.
+
+EXCESSIVE HEAT and HEAT can - for the purpose of this analysis - be regarded as the same kind of event and therefore be summarized. 
+The event EXCESSIVE HEAT will be replaced in the data set by HEAT.
+```{r}
+data$EVTYPE<-gsub("EXCESSIVE HEAT","HEAT",data$EVTYPE,fixed=TRUE)
+```
+
+The analysis above that gives the top ten events is now repeated.
+
+```{r}
+d <- sqldf('select EVTYPE, count(*) as [total number], sum(FATALITIES)+sum(INJURIES) as [Fatalities and injuries] 
+      from data group by EVTYPE order by sum(FATALITIES)+sum(INJURIES) desc')
+head(d,n=10)
+
+d2<-sqldf('select EVTYPE, count(*) as [total number], (sum(FATALITIES)+sum(INJURIES))/count(*) as [averaged fatalities and injuries]
+       from data group by EVTYPE having count(*)>100 order by (sum(FATALITIES)+sum(INJURIES  ))/count(*) desc')
+head(d2,n=10)
+```
+
+Now the events HEAT, TORNADO and ICE STORM can be identified as the ones that
+
+1. occur very often and
+
+2. bear high risks for human health *when* they occur as the averaged numbers of fatalities and injuries is very high.
+
+The follwing table and graph show the total number of fatalities and injuries for these three events from 1993 to 2011.
+```{r}
+d3<-data%>%filter(EVTYPE=="HEAT"|EVTYPE=="TORNADO"|EVTYPE=="ICE STORM")%>%group_by(EVTYPE)%>%summarize(fatalities=sum(FATALITIES),injuries=sum(INJURIES))
+d3
+m<-as.matrix(d3)
+barplot(t(m)[2:3,],names.arg=m[,1],main="Number of fatalities and injuries")
+```
+
+**Heat** has caused **most fatalities**, **tornados most injuries**.
+
+The following figure shows a time series of the number of fatalities and injuries for the three selected events.
+
+```{r}
+d4<-data%>%filter(EVTYPE=="HEAT"|EVTYPE=="TORNADO"|EVTYPE=="ICE STORM")%>%
+            mutate(year=year(BGN_DATE))%>%group_by(EVTYPE,year)%>%
+            summarize(fatalities=sum(FATALITIES),injuries=sum(INJURIES))
+
+d4.melt<-melt(d4,id=c("year","EVTYPE"),measure.vars=c("fatalities","injuries"))
+
+g<-ggplot(d4.melt,aes(year,value))+geom_point(aes(color=EVTYPE))+
+  facet_wrap(~variable,nrow=2,scales="free")+
+  labs(title="Number of fatalities and injuries from 1993 to 2011",y="")
+print(g)
+```
+
+
+### Events that have the greatest economic consequences
+
+We are interested in the sum of PROPDMG and CROPDMG of each event across the United States. The 10 events with the highest damages are reported.
+
+```{r}
+d5 <- data%>%group_by(EVTYPE)%>%
+            summarize(total=n(),damage=sum(PROPDMG+CROPDMG))%>%arrange(desc(damage))
+head(d5,n=10)
+```
+
+The events HURRICANE and HURRICANE/TYPHOON can - for the purpose of this analysis - be regarded es the same kind of event, as well as FLOOD and FLASH FLOOD. Therefore HURRICANE/TYPHOON is replaced bey HURRICANE and FLASH FLOOD by FLOOD.
+
+```{r}
+data$EVTYPE<-gsub("HURRICANE/TYPHOON","HURRICANE",data$EVTYPE,fixed=TRUE)
+data$EVTYPE<-gsub("FLASH FLOOD","FLOOD",data$EVTYPE,fixed=TRUE)
+```
+
+Now the top ten events in terms of property damage are:
+
+```{r}
+d5 <- data%>%group_by(EVTYPE)%>%
+            summarize(total=n(),damage=sum(PROPDMG+CROPDMG))%>%arrange(desc(damage))
+head(d5,n=10)
+```
+
+We discover that **floods** have caused the **greatest property** damages from 1993 to 2011.
+
+The following figure shows a time series of the sum of PROPDMG and CROPDMG for the three selected events with the highest total damages: FLOOD, HURRICANE and STORM SURGE. We take the log of the damage to adjust for skew in the data.
+
+```{r}
+d7<-data%>%filter(EVTYPE=="FLOOD"|EVTYPE=="HURRICANE"|EVTYPE=="STORM SURGE")%>%
+            mutate(year=year(BGN_DATE))%>%group_by(EVTYPE,year)%>%
+            summarize(damage=sum(CROPDMG+PROPDMG))
+
+g<-ggplot(d7,aes(year,log(damage)))+geom_point(aes(color=EVTYPE))+
+          labs(title="Economic damages from 1993 to 2011")
+print(g)
